@@ -1,0 +1,27 @@
+# Secrets and local settings
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+
+# IDE / .NET / WPF
+.vs/
+.idea/
+**/bin/
+**/obj/
+*.user
+
+# PHP
+backend/vendor/
+
+# Web
+node_modules/
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
