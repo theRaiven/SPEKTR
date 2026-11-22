@@ -14,6 +14,8 @@
 
 # PHP
 backend/vendor/
+backend/var/
+*.sqlite
 
 # Web
 node_modules/
