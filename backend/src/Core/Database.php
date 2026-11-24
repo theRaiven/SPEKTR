@@ -50,6 +50,33 @@ class Database
             try {
                 self::$connection = new PDO($dsn, $user, $password, $options);
             } catch (\PDOException $e) {
+                // Если PostgreSQL локально не запущен, для разработки и локального тестирования используется локальная база SQLite
+                $fallback = getenv('DB_FALLBACK_SQLITE') ?: 'true';
+                if ($fallback === 'true' && (getenv('APP_ENV') ?: 'development') === 'development') {
+                    $path = dirname(__DIR__, 2) . '/var/spektr_dev.sqlite';
+                    $dir = dirname($path);
+                    if (!file_exists($dir)) {
+                        @mkdir($dir, 0777, true);
+                    }
+                    self::$connection = new PDO("sqlite:{$path}", null, null, [
+                        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                        PDO::ATTR_EMULATE_PREPARES => false,
+                    ]);
+                    self::$connection->exec('PRAGMA foreign_keys = ON;');
+                    self::$connection->sqliteCreateFunction('now', fn() => date('Y-m-d H:i:s'));
+                    self::$connection->sqliteCreateFunction('CURRENT_DATE', fn() => date('Y-m-d'));
+
+                    $hasTables = (bool) self::$connection->query("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='user_accounts'")->fetchColumn();
+                    if (!$hasTables) {
+                        $schema = @file_get_contents(dirname(__DIR__, 2) . '/tests/schema_sqlite.sql');
+                        $seeds = @file_get_contents(dirname(__DIR__, 2) . '/tests/seeds_sqlite.sql');
+                        if ($schema) self::$connection->exec($schema);
+                        if ($seeds) self::$connection->exec($seeds);
+                    }
+                    return self::$connection;
+                }
+
                 throw new RuntimeException("Не удалось подключиться к базе данных PostgreSQL ({$dsn}): " . $e->getMessage(), 0, $e);
             }
         } elseif ($driver === 'sqlite') {
@@ -70,6 +97,14 @@ class Database
             self::$connection->exec('PRAGMA foreign_keys = ON;');
             self::$connection->sqliteCreateFunction('now', fn() => date('Y-m-d H:i:s'));
             self::$connection->sqliteCreateFunction('CURRENT_DATE', fn() => date('Y-m-d'));
+
+            $hasTables = (bool) self::$connection->query("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='user_accounts'")->fetchColumn();
+            if (!$hasTables) {
+                $schema = @file_get_contents(dirname(__DIR__, 2) . '/tests/schema_sqlite.sql');
+                $seeds = @file_get_contents(dirname(__DIR__, 2) . '/tests/seeds_sqlite.sql');
+                if ($schema) self::$connection->exec($schema);
+                if ($seeds) self::$connection->exec($seeds);
+            }
         } else {
             throw new RuntimeException("Неподдерживаемый драйвер базы данных: {$driver}");
         }
