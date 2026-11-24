@@ -28,6 +28,16 @@ class Request
     private function parseHeaders(): array
     {
         $headers = [];
+
+        if (function_exists('apache_request_headers')) {
+            $apacheHeaders = apache_request_headers();
+            if (is_array($apacheHeaders)) {
+                foreach ($apacheHeaders as $name => $value) {
+                    $headers[strtolower($name)] = $value;
+                }
+            }
+        }
+
         foreach ($_SERVER as $key => $value) {
             if (str_starts_with($key, 'HTTP_')) {
                 $name = str_replace('_', '-', strtolower(substr($key, 5)));
@@ -35,6 +45,8 @@ class Request
             } elseif (in_array($key, ['CONTENT_TYPE', 'CONTENT_LENGTH'])) {
                 $name = str_replace('_', '-', strtolower($key));
                 $headers[$name] = $value;
+            } elseif ($key === 'REDIRECT_HTTP_AUTHORIZATION') {
+                $headers['authorization'] = $value;
             }
         }
         return $headers;

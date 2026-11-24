@@ -228,3 +228,290 @@ Authorization: Bearer <token>
 2. Ролевая модель доступа (RBAC): права проверяются на стороне сервера для каждого эндпоинта.
 3. Транзакционность: многошаговые операции (смена статуса, списание со склада, проводка оплаты) выполняются в рамках транзакций.
 4. Хранение паролей: пароли пользователей хранятся исключительно в виде bcrypt-хешей.
+
+---
+
+## Подробные сценарии ручного тестирования (Manual Test Cases)
+
+Данный раздел предназначен для ручной проверки работы сервера через любой HTTP-клиент (**Postman**, **Insomnia**, **cURL**, расширение **REST Client** в VS Code или браузер).
+
+Базовый URL: `http://localhost:8080/api` (или `http://127.0.0.1:8000/api` при автономном запуске через `php -S`).
+
+Все защищенные запросы требуют передачи заголовка:
+`Authorization: Bearer <полученный_токен>`
+
+---
+
+### Сценарий 1: Регистрация и аутентификация пользователей
+
+#### TC-01: Регистрация нового клиента
+* **Метод и URL**: `POST /api/auth/register`
+* **Заголовки**: `Content-Type: application/json`
+* **Тело запроса**:
+  ```json
+  {
+    "login": "alex_client",
+    "password": "password123",
+    "last_name": "Алексеев",
+    "first_name": "Алексей",
+    "middle_name": "Сергеевич",
+    "phone": "+79991112233",
+    "email": "alex@example.test"
+  }
+  ```
+* **Ожидаемый ответ**: `HTTP 201 Created`
+* **Проверка**: Возвращается `token` и объект `user` с ролью `client`. В базе создана запись в таблицах `УЧЕТНЫЕ_ЗАПИСИ` и `КЛИЕНТЫ`.
+
+#### TC-02: Вход под существующими ролями (Администратор, Мастер, Клиент)
+* **Метод и URL**: `POST /api/auth/login`
+* **Заголовки**: `Content-Type: application/json`
+* **Тестовые учетные данные**:
+  1. Администратор: `{"login": "admin", "password": "spektr123"}`
+  2. Мастер по смартфонам: `{"login": "master", "password": "spektr123"}`
+  3. Клиент: `{"login": "ivan", "password": "client123"}`
+* **Ожидаемый ответ**: `HTTP 200 OK`
+* **Проверка**: В ответе приходит `data.token`, а в `data.user.role` указана соответствующая роль (`admin`, `master`, `client`).
+
+#### TC-03: Негативная проверка: отказ при неверном пароле
+* **Метод и URL**: `POST /api/auth/login`
+* **Тело запроса**: `{"login": "admin", "password": "wrong_password"}`
+* **Ожидаемый ответ**: `HTTP 401 Unauthorized`
+* **Проверка**: Сообщение об ошибке `Неверный логин или пароль`. Токен не выдается.
+
+---
+
+### Сценарий 2: Подача и первичная обработка заявки
+
+#### TC-04: Клиент оформляет заявку на ремонт смартфона
+* **Метод и URL**: `POST /api/orders`
+* **Заголовок**: `Authorization: Bearer <ТОКЕН_КЛИЕНТА>`
+* **Тело запроса**:
+  ```json
+  {
+    "device_type": "Смартфон",
+    "brand": "Apple",
+    "model": "iPhone 13",
+    "serial_number": "SN-IPHONE-777",
+    "fault_description": "Разбит дисплей, мерцает полоса"
+  }
+  ```
+* **Ожидаемый ответ**: `HTTP 201 Created`
+* **Проверка**: Возвращается `order_id`, статус заказа — `Новая`. Заказ привязан к текущему клиенту.
+
+#### TC-05: Разграничение прав: мастер не может принять заявку в сервис
+* **Метод и URL**: `POST /api/orders/{order_id}/accept`
+* **Заголовок**: `Authorization: Bearer <ТОКЕН_МАСТЕРА>`
+* **Ожидаемый ответ**: `HTTP 403 Forbidden`
+* **Проверка**: Сервер блокирует попытку мастера принять заказ, так как операция разрешена только администратору.
+
+#### TC-06: Администратор принимает заявку в сервис
+* **Метод и URL**: `POST /api/orders/{order_id}/accept`
+* **Заголовок**: `Authorization: Bearer <ТОКЕН_АДМИНИСТРАТОРА>`
+* **Ожидаемый ответ**: `HTTP 200 OK`
+* **Проверка**: Статус заказа переходит в `Принята`. В истории статусов зафиксирована запись с `employee_id` администратора.
+
+---
+
+### Сценарий 3: Назначение мастера и контроль специализации
+
+#### TC-07: Контроль квалификации: отказ при назначении неподходящего мастера
+* **Метод и URL**: `POST /api/orders/{order_id}/assign`
+* **Заголовок**: `Authorization: Bearer <ТОКЕН_АДМИНИСТРАТОРА>`
+* **Тело запроса**: `{"master_id": 3}` *(мастер №3 Дмитриев специализируется только на ноутбуках и ПК, а заказ — на смартфон)*
+* **Ожидаемый ответ**: `HTTP 409 Conflict`
+* **Проверка**: Сервер отвергает назначение с текстом ошибки: *«Мастер не имеет действующей квалификации для ремонта категории устройств 'Смартфон'»*.
+
+#### TC-08: Успешное назначение сертифицированного мастера
+* **Метод и URL**: `POST /api/orders/{order_id}/assign`
+* **Заголовок**: `Authorization: Bearer <ТОКЕН_АДМИНИСТРАТОРА>`
+* **Тело запроса**: `{"master_id": 2}` *(мастер №2 Сидоров Алексей — ведущий специалист по смартфонам)*
+* **Ожидаемый ответ**: `HTTP 200 OK`
+* **Проверка**: Статус заказа переходит в `Передана мастеру`. Создана запись в `НАЗНАЧЕНИЯ_ЗАКАЗОВ`.
+
+---
+
+### Сценарий 4: Диагностика, ремонт и списание со склада
+
+#### TC-09: Мастер переводит заказ в диагностику и работу
+* **Метод и URL**: `PATCH /api/orders/{order_id}/status`
+* **Заголовок**: `Authorization: Bearer <ТОКЕН_МАСТЕРА>`
+* **Шаг 1**: `{"status": "Диагностика", "note": "Проверка тачскрина и подсветки"}`
+  * Ожидаемый ответ: `HTTP 200 OK`, статус `Диагностика`.
+* **Шаг 2**: `{"status": "В работе", "note": "Разборка аппарата, демонтаж модуля"}`
+  * Ожидаемый ответ: `HTTP 200 OK`, статус `В работе`.
+
+#### TC-10: Мастер фиксирует выполненную работу
+* **Метод и URL**: `POST /api/orders/{order_id}/works`
+* **Заголовок**: `Authorization: Bearer <ТОКЕН_МАСТЕРА>`
+* **Тело запроса**: `{"work_type_id": 3}` *(Замена дисплея, тариф 2900 руб., гарантия 120 дней)*
+* **Ожидаемый ответ**: `HTTP 201 Created`
+* **Проверка**: В заказе появляется работа с зафиксированной на момент выполнения ценой тарифа.
+
+#### TC-11: Мастер списывает запчасть со склада
+* **Метод и URL**: `POST /api/orders/{order_id}/parts`
+* **Заголовок**: `Authorization: Bearer <ТОКЕН_МАСТЕРА>`
+* **Тело запроса**: `{"part_id": 1, "quantity": 1}` *(Разъем/модуль, цена 400 руб.)*
+* **Ожидаемый ответ**: `HTTP 201 Created`
+* **Проверка**:
+  1. Деталь привязана к заказу (`order_part_id`).
+  2. Остаток детали в каталоге `ЗАПЧАСТИ` уменьшен на 1.
+  3. В таблице `ДВИЖЕНИЯ_ЗАПЧАСТЕЙ` зафиксирована транзакция расхода.
+
+#### TC-12: Мастер завершает ремонтные работы
+* **Метод и URL**: `PATCH /api/orders/{order_id}/status`
+* **Заголовок**: `Authorization: Bearer <ТОКЕН_МАСТЕРА>`
+* **Тело запроса**: `{"status": "Ожидает оплаты", "note": "Ремонт окончен, аппарат протестирован"}`
+* **Ожидаемый ответ**: `HTTP 200 OK`
+* **Проверка**: Статус заказа — `Ожидает оплаты`. Заказ готов к финансовым расчетам.
+
+---
+
+### Сценарий 5: Скидки, оплата и завершение заказа
+
+#### TC-13: Клиент применяет промокод на скидку 5%
+* **Метод и URL**: `POST /api/orders/{order_id}/discounts`
+* **Заголовок**: `Authorization: Bearer <ТОКЕН_КЛИЕНТА>`
+* **Тело запроса**: `{"type": "promo", "code": "WELCOME5"}`
+* **Ожидаемый ответ**: `HTTP 201 Created`
+* **Проверка**:
+  1. Стоимость заказа (2900 работы + 400 запчасти = 3300 руб.).
+  2. Скидка 5% = 165 руб.
+  3. Итоговая сумма к оплате (`total_cost` / `balance_due`) пересчитана: **3135 руб.**
+
+#### TC-14: Защита: блокировка повторного применения скидки
+* **Метод и URL**: Повторный `POST /api/orders/{order_id}/discounts` с тем же промокодом `WELCOME5`.
+* **Заголовок**: `Authorization: Bearer <ТОКЕН_КЛИЕНТА>`
+* **Ожидаемый ответ**: `HTTP 409 Conflict`
+* **Проверка**: Ошибка *«Промокод 'WELCOME5' уже применён к этому заказу»*.
+
+#### TC-15: Администратор проводит оплату и заказ закрывается
+* **Метод и URL**: `POST /api/orders/{order_id}/payment`
+* **Заголовок**: `Authorization: Bearer <ТОКЕН_АДМИНИСТРАТОРА>`
+* **Тело запроса**: `{"amount": 3135.0, "payment_method_id": 1}`
+* **Ожидаемый ответ**: `HTTP 201 Created`
+* **Проверка**:
+  1. В `summary` флаг `is_fully_paid: true`.
+  2. Остаток долга `balance_due: 0`.
+  3. Сервер **автоматически переводит заказ в финальный статус `Завершена`**.
+
+---
+
+### Сценарий 6: Клиентский отзыв
+
+#### TC-16: Клиент оставляет отзыв к завершенному ремонту
+* **Метод и URL**: `POST /api/orders/{order_id}/review`
+* **Заголовок**: `Authorization: Bearer <ТОКЕН_КЛИЕНТА>`
+* **Тело запроса**:
+  ```json
+  {
+    "rating": 5,
+    "comment": "Отличная работа! Экран заменили за пару часов, всё работает идеально."
+  }
+  ```
+* **Ожидаемый ответ**: `HTTP 201 Created`
+* **Проверка**: Отзыв сохранен и привязан к выполненной работе.
+
+#### TC-17: Защита от накрутки: запрет повторного отзыва
+* **Метод и URL**: Повторный `POST /api/orders/{order_id}/review` по тому же заказу.
+* **Ожидаемый ответ**: `HTTP 409 Conflict`
+* **Проверка**: Ошибка *«Отзыв по выполненной работе этого заказа уже оставлен»*.
+
+---
+
+## Интеграция с настольным приложением на C# (WPF)
+
+В десктопном приложении на C# WPF **не должно быть прямых SQL-запросов к PostgreSQL**. Все взаимодействие с базой данных и бизнес-логикой выполняется строго через данный REST API.
+
+#### Пример сервиса взаимодействия на C# (`ApiClient.cs`):
+
+```csharp
+using System;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using System.Threading.Tasks;
+
+namespace Spektr.Desktop.Services
+{
+    public class ApiClient
+    {
+        private readonly HttpClient _http;
+        private string _token;
+
+        public ApiClient(string baseUrl = "http://localhost:8080/api")
+        {
+            _http = new HttpClient { BaseAddress = new Uri(baseUrl) };
+        }
+
+        // 1. Авторизация и сохранение токена
+        public async Task<bool> LoginAsync(string login, string password)
+        {
+            var body = JsonSerializer.Serialize(new { login, password });
+            var response = await _http.PostAsync("/api/auth/login", 
+                new StringContent(body, Encoding.UTF8, "application/json"));
+
+            if (!response.IsSuccessStatusCode) return false;
+
+            var json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            _token = doc.RootElement.GetProperty("data").GetProperty("token").GetString();
+
+            // Прикрепляем Bearer токен ко всем последующим запросам
+            _http.DefaultRequestHeaders.Authorization = 
+                new AuthenticationHeaderValue("Bearer", _token);
+
+            return true;
+        }
+
+        // 2. Получение списка заказов (согласно роли текущего пользователя)
+        public async Task<string> GetOrdersJsonAsync()
+        {
+            var response = await _http.GetAsync("/api/orders");
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadAsStringAsync();
+        }
+
+        // 3. Смена статуса мастером (например, "В работе")
+        public async Task<bool> UpdateOrderStatusAsync(int orderId, string newStatus, string note)
+        {
+            var body = JsonSerializer.Serialize(new { status = newStatus, note });
+            var request = new HttpRequestMessage(new HttpMethod("PATCH"), $"/api/orders/{orderId}/status")
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+
+            var response = await _http.SendAsync(request);
+            return response.IsSuccessStatusCode;
+        }
+    }
+}
+```
+
+---
+
+## Подключение PostgreSQL
+
+Сервер по умолчанию использует умный fallback на локальный SQLite (`var/spektr_dev.sqlite`), если PostgreSQL не запущен. Для промышленной работы с PostgreSQL:
+
+1. **Убедитесь, что служба PostgreSQL запущена** на порту 5432:
+   ```bash
+   # Проверка доступности порта в Windows PowerShell:
+   Test-NetConnection -ComputerName 127.0.0.1 -Port 5432
+   ```
+2. **Создайте базу данных `spektr` и накатите схему бригады**:
+   ```sql
+   CREATE DATABASE spektr WITH ENCODING 'UTF8';
+   ```
+   Выполните файлы `database/migrations/01_schema.sql` и `database/seeds/01_initial_data.sql`.
+3. **Настройте `.env` в папке `backend/`**:
+   ```ini
+   DB_DRIVER=pgsql
+   DB_HOST=127.0.0.1
+   DB_PORT=5432
+   DB_NAME=spektr
+   DB_USER=postgres
+   DB_PASSWORD=ваш_пароль_от_postgres
+   ```
+4. После сохранения `.env` сервер автоматически переключится на реальный PostgreSQL, не требуя переписывания ни строчки PHP-кода.
+
