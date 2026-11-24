@@ -10,32 +10,32 @@ class Router
 {
     private array $routes = [];
 
-    public function get(string $path, array $handler, array $middlewares = []): self
+    public function get(string $path, callable|array $handler, array $middlewares = []): self
     {
         return $this->addRoute('GET', $path, $handler, $middlewares);
     }
 
-    public function post(string $path, array $handler, array $middlewares = []): self
+    public function post(string $path, callable|array $handler, array $middlewares = []): self
     {
         return $this->addRoute('POST', $path, $handler, $middlewares);
     }
 
-    public function put(string $path, array $handler, array $middlewares = []): self
+    public function put(string $path, callable|array $handler, array $middlewares = []): self
     {
         return $this->addRoute('PUT', $path, $handler, $middlewares);
     }
 
-    public function patch(string $path, array $handler, array $middlewares = []): self
+    public function patch(string $path, callable|array $handler, array $middlewares = []): self
     {
         return $this->addRoute('PATCH', $path, $handler, $middlewares);
     }
 
-    public function delete(string $path, array $handler, array $middlewares = []): self
+    public function delete(string $path, callable|array $handler, array $middlewares = []): self
     {
         return $this->addRoute('DELETE', $path, $handler, $middlewares);
     }
 
-    private function addRoute(string $method, string $path, array $handler, array $middlewares): self
+    private function addRoute(string $method, string $path, callable|array $handler, array $middlewares): self
     {
         $pattern = preg_replace('/\{([a-zA-Z0-9_]+)\}/', '(?P<$1>[^/]+)', $path);
         $pattern = "#^" . $pattern . "$#";
@@ -81,6 +81,12 @@ class Router
                         } elseif (is_array($middleware) && is_callable($middleware)) {
                             call_user_func($middleware, $request);
                         }
+                    }
+
+                    // Execute handler
+                    if (is_callable($route['handler'])) {
+                        call_user_func($route['handler'], $request);
+                        return;
                     }
 
                     // Call handler [ControllerClass, 'action']
