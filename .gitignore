@@ -25,3 +25,19 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local application configuration
+config.php
+**/var/sessions/
+**/var/*.json
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+
+# Certificates and backups
+*.key
+*.pem
+*.dump
+*.bak

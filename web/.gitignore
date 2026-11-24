@@ -1,0 +1,17 @@
+/config.php
+/var/*.json
+/var/sessions/
+*.log
+.DS_Store
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+
+# Secrets and backups
+.env
+*.key
+*.pem
+*.dump
+*.bak
